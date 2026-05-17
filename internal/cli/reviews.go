@@ -219,11 +219,11 @@ func parseReviewsResponse(body []byte) ([]Review, *RatingSummary, error) {
 		var dist []int
 		if json.Unmarshal(data[5], &dist) == nil && len(dist) == 5 {
 			summary = &RatingSummary{
-				Stars5: dist[0],
-				Stars4: dist[1],
+				Stars5: dist[4],
+				Stars4: dist[3],
 				Stars3: dist[2],
-				Stars2: dist[3],
-				Stars1: dist[4],
+				Stars2: dist[1],
+				Stars1: dist[0],
 				Total:  dist[0] + dist[1] + dist[2] + dist[3] + dist[4],
 			}
 		}
