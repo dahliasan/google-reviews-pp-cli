@@ -1,8 +1,8 @@
 # google-reviews-pp-cli
 
-Fetch Google Maps reviews and rating summaries — **no API key required**.
+Fetch Google Maps reviews, rating summaries, and full business profile data — **no API key required**.
 
-Reverse-engineered from the Google Maps internal `listentitiesreviews` endpoint.
+Reverse-engineered from Google Maps internal endpoints (`listentitiesreviews`, `preview/place`).
 Reads cookies from your local Chrome profile automatically (macOS/Linux).
 
 Printed by [@dahliasan](https://github.com/dahliasan) using [Printing Press](https://github.com/mvanhorn/cli-printing-press).
@@ -45,7 +45,7 @@ To find your NID: open DevTools on google.com → Application → Cookies → `N
 
 ## Usage
 
-### Get reviews for a business
+### Reviews
 
 Pass a Google Maps URL or raw CID (`0xHEX:0xHEX` from the URL's `data=` param):
 
@@ -55,19 +55,43 @@ google-reviews-pp-cli reviews "https://www.google.com/maps/place/...data=!3m5!1s
 
 # From a CID directly
 google-reviews-pp-cli reviews "0x89c258bc949d58cf:0x84ac8a2dc2535dc2"
+
+# Newest first, fetch all (auto-paginates up to API limit ~300)
+google-reviews-pp-cli reviews --sort newest --all "0x89c258bc949d58cf:0x84ac8a2dc2535dc2"
+
+# JSON output with photos, owner responses, Local Guide badge, visit date
+google-reviews-pp-cli reviews --json "0x89c258bc949d58cf:0x84ac8a2dc2535dc2"
 ```
 
-### Sort and filter
+**Review flags:**
 
-```bash
-# Newest reviews first
-google-reviews-pp-cli reviews --sort newest "0x89c258bc949d58cf:0x84ac8a2dc2535dc2"
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--sort` | `relevant` | `relevant`, `newest`, `highest`, `lowest` |
+| `--count` | `20` | Reviews per page (max 20) |
+| `--all` | false | Auto-paginate all reviews |
+| `--offset` | `0` | Starting offset |
+| `--lang` | `en` | Language code (e.g. `fr`, `zh`) |
+| `--country` | `us` | Country code (e.g. `au`, `sg`) |
+| `--raw` | false | Dump raw API JSON for debugging |
 
-# Highest rated first
-google-reviews-pp-cli reviews --sort highest "0x89c258bc949d58cf:0x84ac8a2dc2535dc2"
-
-# Fetch all available reviews (auto-paginates up to API limit)
-google-reviews-pp-cli reviews --all "0x89c258bc949d58cf:0x84ac8a2dc2535dc2"
+**JSON review object:**
+```json
+{
+  "review_id": "...",
+  "rating": 5,
+  "author": "Jane Smith",
+  "author_id": "...",
+  "date": "3 months ago",
+  "timestamp_ms": 1769986041693,
+  "text": "Full review text...",
+  "language": "en",
+  "review_url": "https://www.google.com/maps/reviews/...",
+  "photos": ["https://lh5.googleusercontent.com/p/..."],
+  "owner_response": "Thank you for the kind words!",
+  "is_local_guide": true,
+  "visit_date": "Visited March 2025"
+}
 ```
 
 ### Rating summary
@@ -87,18 +111,56 @@ Total: 7,713 reviews
 1 ★    1.6%                  122
 ```
 
-### JSON output
+### Business profile
+
+Fetch the full Google Maps business profile — name, address, phone, website, hours, rating, coordinates, category, and description:
 
 ```bash
-google-reviews-pp-cli reviews --json "0x89c258bc949d58cf:0x84ac8a2dc2535dc2"
-google-reviews-pp-cli summary --json "0x89c258bc949d58cf:0x84ac8a2dc2535dc2"
+google-reviews-pp-cli business get "0x89c258bc949d58cf:0x84ac8a2dc2535dc2"
+
+# JSON output
+google-reviews-pp-cli business get --json "0x89c258bc949d58cf:0x84ac8a2dc2535dc2"
 ```
 
-### Different language/country
+**JSON business profile object:**
+```json
+{
+  "name": "Example Business",
+  "address": "123 Main St, Sydney NSW",
+  "phone": "+61 2 9999 0000",
+  "website": "https://example.com",
+  "rating": 4.8,
+  "review_count": 312,
+  "category": "Barber shop",
+  "lat": -33.8688,
+  "lng": 151.2093,
+  "hours": {
+    "Monday": "9:00 AM – 6:00 PM",
+    "Tuesday": "9:00 AM – 6:00 PM"
+  },
+  "description": "...",
+  "feature_id": "0x89c258bc949d58cf:0x84ac8a2dc2535dc2"
+}
+```
+
+### Business photos
+
+Fetch photo URLs from a business's Google Maps profile:
 
 ```bash
-google-reviews-pp-cli reviews --lang fr --country fr "0x89c258bc949d58cf:0x84ac8a2dc2535dc2"
+# Profile photos
+google-reviews-pp-cli business photos "0x89c258bc949d58cf:0x84ac8a2dc2535dc2"
+
+# Include photos uploaded by reviewers (paginates through reviews)
+google-reviews-pp-cli business photos --all-reviews "0x89c258bc949d58cf:0x84ac8a2dc2535dc2"
+
+# JSON array of URLs
+google-reviews-pp-cli business photos --json "0x89c258bc949d58cf:0x84ac8a2dc2535dc2"
 ```
+
+Photo URLs are in `lh5.googleusercontent.com` format and accept size suffixes:
+- `=w1600` — width 1600px
+- `=w800-h600` — width × height
 
 ## Finding a CID
 
@@ -118,6 +180,8 @@ The format is `0xLO:0xHI` — two 64-bit hex integers.
 |---------|-------------|
 | `reviews <cid>` | Fetch reviews (table or JSON) |
 | `summary <cid>` | Rating distribution |
+| `business get <cid>` | Full business profile (name, address, phone, hours, etc.) |
+| `business photos <cid>` | Photo URLs from the business profile |
 | `doctor` | Check auth and connectivity |
 
 ### Global flags
@@ -125,13 +189,20 @@ The format is `0xLO:0xHI` — two 64-bit hex integers.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--json` | false | Output as JSON |
-| `--sort` | relevant | `relevant`, `newest`, `highest`, `lowest` |
-| `--count` | 20 | Reviews per page (max 20) |
-| `--all` | false | Auto-paginate all reviews |
-| `--offset` | 0 | Starting offset |
-| `--lang` | en | Language code |
-| `--country` | us | Country code |
+| `--agent` | false | JSON + compact + no prompts (for automation) |
 | `--dry-run` | false | Print request URL without fetching |
+| `--timeout` | `30s` | Request timeout |
+
+## Automation
+
+For headless / CI use, set `GOOGLE_NID` instead of relying on agent-browser:
+
+```bash
+export GOOGLE_NID="531=..."
+google-reviews-pp-cli reviews --agent "0x89c258bc949d58cf:0x84ac8a2dc2535dc2"
+```
+
+The NID cookie is valid for approximately 6 months before requiring manual refresh.
 
 ## Known Gaps
 
