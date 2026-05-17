@@ -12,8 +12,8 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
-	"strings"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -21,15 +21,15 @@ import (
 
 // Review holds a single parsed Google review.
 type Review struct {
-	ReviewID   string `json:"review_id"`
-	Rating     int    `json:"rating"`
-	Author     string `json:"author"`
-	AuthorID   string `json:"author_id"`
-	Date       string `json:"date"`
-	TimestampMs int64 `json:"timestamp_ms"`
-	Text       string `json:"text"`
-	Language   string `json:"language"`
-	ReviewURL  string `json:"review_url"`
+	ReviewID    string `json:"review_id"`
+	Rating      int    `json:"rating"`
+	Author      string `json:"author"`
+	AuthorID    string `json:"author_id"`
+	Date        string `json:"date"`
+	TimestampMs int64  `json:"timestamp_ms"`
+	Text        string `json:"text"`
+	Language    string `json:"language"`
+	ReviewURL   string `json:"review_url"`
 }
 
 // RatingSummary holds the overall rating and distribution for a place.
@@ -117,7 +117,7 @@ func extractChromeCookies() string {
 }
 
 // fetchReviews calls the listentitiesreviews endpoint and returns raw JSON response body.
-func fetchReviews(lo, hi uint64, count, offset, sc int, lang, country, cookieOverride string) ([]byte, error) {
+func fetchReviews(lo, hi uint64, count, offset, sc int, lang, country, cookieOverride string, timeout time.Duration) ([]byte, error) {
 	pb := buildPB(lo, hi, count, offset, sc)
 	apiURL := fmt.Sprintf(
 		"https://www.google.com/maps/preview/review/listentitiesreviews?authuser=0&hl=%s&gl=%s&pb=%s",
@@ -135,7 +135,10 @@ func fetchReviews(lo, hi uint64, count, offset, sc int, lang, country, cookieOve
 		req.Header.Set("Cookie", cookieOverride)
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	client := &http.Client{Timeout: timeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
@@ -147,7 +150,11 @@ func fetchReviews(lo, hi uint64, count, offset, sc int, lang, country, cookieOve
 		return nil, err
 	}
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body[:min(200, len(body))]))
+		preview := body
+		if len(preview) > 200 {
+			preview = body[:200]
+		}
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(preview))
 	}
 	return body, nil
 }
@@ -232,11 +239,12 @@ func parseReviewsResponse(body []byte) ([]Review, *RatingSummary, error) {
 	return reviews, summary, nil
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
+func truncateRunes(s string, maxRunes int) string {
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
 	}
-	return b
+	return string(runes[:maxRunes-3]) + "..."
 }
 
 func newReviewsCmd(flags *rootFlags) *cobra.Command {
@@ -267,11 +275,13 @@ Examples:
 
   # Fetch all reviews
   google-reviews-pp-cli reviews --all "0x89c258bc949d58cf:0x84ac8a2dc2535dc2"`,
-		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			lo, hi, err := parseCID(args[0])
-			if err != nil {
-				return fmt.Errorf("invalid input: %w\nProvide a Google Maps URL or CID (0xHEX:0xHEX)", err)
+			if len(args) == 0 {
+				if flagDryRun(flags) {
+					fmt.Fprintf(cmd.OutOrStdout(), "GET https://www.google.com/maps/preview/review/listentitiesreviews?authuser=0&hl=%s&gl=%s&pb=<cid-required>\n", flagLang, flagCountry)
+					return nil
+				}
+				return cmd.Help()
 			}
 
 			sc := sortCode(flagSort)
@@ -279,10 +289,22 @@ Examples:
 				flagCount = 20
 			}
 
+			// Emit a dry-run URL even when the CID is not a valid hex pair.
 			if flagDryRun(flags) {
+				lo, hi, err := parseCID(args[0])
+				if err != nil {
+					// Show a placeholder URL so verify can confirm dry-run mode.
+					fmt.Fprintf(cmd.OutOrStdout(), "GET https://www.google.com/maps/preview/review/listentitiesreviews?authuser=0&hl=%s&gl=%s&pb=<cid=%s>\n", flagLang, flagCountry, url.QueryEscape(args[0]))
+					return nil
+				}
 				pb := buildPB(lo, hi, flagCount, flagOffset, sc)
 				fmt.Fprintf(cmd.OutOrStdout(), "GET https://www.google.com/maps/preview/review/listentitiesreviews?authuser=0&hl=%s&gl=%s&pb=%s\n", flagLang, flagCountry, url.QueryEscape(pb))
 				return nil
+			}
+
+			lo, hi, err := parseCID(args[0])
+			if err != nil {
+				return fmt.Errorf("invalid input: %w\nProvide a Google Maps URL or CID (0xHEX:0xHEX)", err)
 			}
 
 			cookies := extractChromeCookies()
@@ -290,7 +312,7 @@ Examples:
 			offset := flagOffset
 
 			for {
-				body, err := fetchReviews(lo, hi, flagCount, offset, sc, flagLang, flagCountry, cookies)
+				body, err := fetchReviews(lo, hi, flagCount, offset, sc, flagLang, flagCountry, cookies, flags.timeout)
 				if err != nil {
 					if flagAll && len(allReviews) > 0 {
 						// Google's API uses cursor-based pagination internally;
@@ -345,18 +367,9 @@ func printReviewsTable(w io.Writer, reviews []Review) {
 	fmt.Fprintf(w, "%-6s  %-20s  %-16s  %s\n", "------", "--------------------", "----------------", "------")
 	for _, r := range reviews {
 		stars := strings.Repeat("★", r.Rating) + strings.Repeat("☆", 5-r.Rating)
-		author := r.Author
-		if len(author) > 20 {
-			author = author[:17] + "..."
-		}
-		date := r.Date
-		if len(date) > 16 {
-			date = date[:16]
-		}
-		text := r.Text
-		if len(text) > 60 {
-			text = text[:57] + "..."
-		}
+		author := truncateRunes(r.Author, 20)
+		date := truncateRunes(r.Date, 16)
+		text := truncateRunes(r.Text, 60)
 		fmt.Fprintf(w, "%-6s  %-20s  %-16s  %s\n", stars, author, date, text)
 	}
 	if len(reviews) > 0 {
@@ -376,15 +389,34 @@ func newSummaryCmd(flags *rootFlags) *cobra.Command {
 Examples:
   google-reviews-pp-cli summary "0x89c258bc949d58cf:0x84ac8a2dc2535dc2"
   google-reviews-pp-cli summary --json "https://www.google.com/maps/place/.../data=!...!1s0x89c258bc949d58cf:0x84ac8a2dc2535dc2"`,
-		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				if flagDryRun(flags) {
+					fmt.Fprintf(cmd.OutOrStdout(), "GET https://www.google.com/maps/preview/review/listentitiesreviews?authuser=0&hl=%s&gl=%s&pb=<cid-required>\n", flagLang, flagCountry)
+					return nil
+				}
+				return cmd.Help()
+			}
+
+			// Emit a dry-run URL even when the CID is not a valid hex pair.
+			if flagDryRun(flags) {
+				lo, hi, err := parseCID(args[0])
+				if err != nil {
+					fmt.Fprintf(cmd.OutOrStdout(), "GET https://www.google.com/maps/preview/review/listentitiesreviews?authuser=0&hl=%s&gl=%s&pb=<cid=%s>\n", flagLang, flagCountry, url.QueryEscape(args[0]))
+					return nil
+				}
+				pb := buildPB(lo, hi, 1, 0, 1)
+				fmt.Fprintf(cmd.OutOrStdout(), "GET https://www.google.com/maps/preview/review/listentitiesreviews?authuser=0&hl=%s&gl=%s&pb=%s\n", flagLang, flagCountry, url.QueryEscape(pb))
+				return nil
+			}
+
 			lo, hi, err := parseCID(args[0])
 			if err != nil {
 				return fmt.Errorf("invalid input: %w", err)
 			}
 
 			cookies := extractChromeCookies()
-			body, err := fetchReviews(lo, hi, 1, 0, 1, flagLang, flagCountry, cookies)
+			body, err := fetchReviews(lo, hi, 1, 0, 1, flagLang, flagCountry, cookies, flags.timeout)
 			if err != nil {
 				return fmt.Errorf("fetch summary: %w", err)
 			}
