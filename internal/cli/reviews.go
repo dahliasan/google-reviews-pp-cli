@@ -22,15 +22,19 @@ import (
 
 // Review holds a single parsed Google review.
 type Review struct {
-	ReviewID    string `json:"review_id"`
-	Rating      int    `json:"rating"`
-	Author      string `json:"author"`
-	AuthorID    string `json:"author_id"`
-	Date        string `json:"date"`
-	TimestampMs int64  `json:"timestamp_ms"`
-	Text        string `json:"text"`
-	Language    string `json:"language"`
-	ReviewURL   string `json:"review_url"`
+	ReviewID      string   `json:"review_id"`
+	Rating        int      `json:"rating"`
+	Author        string   `json:"author"`
+	AuthorID      string   `json:"author_id"`
+	Date          string   `json:"date"`
+	TimestampMs   int64    `json:"timestamp_ms"`
+	Text          string   `json:"text"`
+	Language      string   `json:"language"`
+	ReviewURL     string   `json:"review_url"`
+	Photos        []string `json:"photos,omitempty"`
+	OwnerResponse string   `json:"owner_response,omitempty"`
+	IsLocalGuide  bool     `json:"is_local_guide,omitempty"`
+	VisitDate     string   `json:"visit_date,omitempty"`
 }
 
 // RatingSummary holds the overall rating and distribution for a place.
@@ -81,7 +85,7 @@ func sortCode(sort string) int {
 
 // buildPB constructs the pb= parameter for listentitiesreviews.
 func buildPB(lo, hi uint64, count, offset, sort int) string {
-	return fmt.Sprintf("!1m2!1y%d!2y%d!2m2!1i%d!2i%d!3e%d!5m2!1sGOOGLE_REVIEWS_CLI!7e81", lo, hi, count, offset, sort)
+	return fmt.Sprintf("!1m2!1y%d!2y%d!2m2!1i%d!2i%d!3e%d!4m5!3b1!4b1!5b1!6b1!7b1!5m2!1sGOOGLE_REVIEWS_CLI!7e81", lo, hi, count, offset, sort)
 }
 
 // extractChromeCookies tries to get NID and __Secure-STRP from Chrome via agent-browser.
@@ -213,6 +217,39 @@ func parseReviewsResponse(body []byte) ([]Review, *RatingSummary, error) {
 			if len(r) > 10 && r[10] != nil {
 				json.Unmarshal(r[10], &review.ReviewID)
 			}
+			if len(r) > 12 && r[12] != nil {
+				// Local Guide badge is nested: r[12] is an array, badge text at [1][10]
+				var badge []json.RawMessage
+				if json.Unmarshal(r[12], &badge) == nil && len(badge) > 1 {
+					var inner []json.RawMessage
+					if json.Unmarshal(badge[1], &inner) == nil && len(inner) > 10 {
+						var badgeText string
+						if json.Unmarshal(inner[10], &badgeText) == nil {
+							review.IsLocalGuide = strings.Contains(strings.ToLower(badgeText), "local guide")
+						}
+					}
+				}
+			}
+			if len(r) > 14 && r[14] != nil {
+				// Review photos: r[14] is an array of photo entries.
+				// Each entry: [photo_key, [... , [...], ..., ..., ..., ..., ..., [url, url2], ...]]
+				// URL is at photo_entry[1][6][0].
+				var photoEntries []json.RawMessage
+				if json.Unmarshal(r[14], &photoEntries) == nil {
+					for _, entry := range photoEntries {
+						var parts []json.RawMessage
+						if json.Unmarshal(entry, &parts) == nil && len(parts) > 1 {
+							var photoData []json.RawMessage
+							if json.Unmarshal(parts[1], &photoData) == nil && len(photoData) > 6 {
+								var urls []string
+								if json.Unmarshal(photoData[6], &urls) == nil && len(urls) > 0 && urls[0] != "" {
+									review.Photos = append(review.Photos, urls[0])
+								}
+							}
+						}
+					}
+				}
+			}
 			if len(r) > 18 && r[18] != nil {
 				json.Unmarshal(r[18], &review.ReviewURL)
 			}
@@ -221,6 +258,17 @@ func parseReviewsResponse(body []byte) ([]Review, *RatingSummary, error) {
 			}
 			if len(r) > 32 && r[32] != nil {
 				json.Unmarshal(r[32], &review.Language)
+			}
+			if len(r) > 45 && r[45] != nil {
+				// Visit date (e.g. "March 2025") is a string at r[45].
+				json.Unmarshal(r[45], &review.VisitDate)
+			}
+			// Owner response: try r[7] as a nested array where text is at [1].
+			if len(r) > 7 && r[7] != nil {
+				var ownerBlock []json.RawMessage
+				if json.Unmarshal(r[7], &ownerBlock) == nil && len(ownerBlock) > 1 {
+					json.Unmarshal(ownerBlock[1], &review.OwnerResponse)
+				}
 			}
 			reviews = append(reviews, review)
 		}
@@ -259,6 +307,7 @@ func newReviewsCmd(flags *rootFlags) *cobra.Command {
 	var flagLang string
 	var flagCountry string
 	var flagOffset int
+	var flagRaw bool
 
 	cmd := &cobra.Command{
 		Use:   "reviews <maps-url-or-cid>",
@@ -328,6 +377,12 @@ Examples:
 					return fmt.Errorf("fetch reviews: %w", err)
 				}
 
+				// --raw dumps the first page's unprocessed response and exits.
+				if flagRaw {
+					_, err := cmd.OutOrStdout().Write(stripGooglePrefix(body))
+					return err
+				}
+
 				batch, _, err := parseReviewsResponse(body)
 				if err != nil {
 					return fmt.Errorf("parse reviews: %w", err)
@@ -363,6 +418,7 @@ Examples:
 	cmd.Flags().StringVar(&flagLang, "lang", "en", "Language code (e.g. en, fr, de)")
 	cmd.Flags().StringVar(&flagCountry, "country", "us", "Country code (e.g. us, gb, de)")
 	cmd.Flags().IntVar(&flagOffset, "offset", 0, "Starting offset for pagination")
+	cmd.Flags().BoolVar(&flagRaw, "raw", false, "Dump the raw API response JSON (useful for exploring unparsed fields)")
 
 	return cmd
 }
@@ -372,8 +428,8 @@ func flagDryRun(flags *rootFlags) bool {
 }
 
 func printReviewsTable(w io.Writer, reviews []Review) {
-	fmt.Fprintf(w, "%-6s  %-20s  %-16s  %s\n", "Rating", "Author", "Date", "Review")
-	fmt.Fprintf(w, "%-6s  %-20s  %-16s  %s\n", "------", "--------------------", "----------------", "------")
+	fmt.Fprintf(w, "%-6s  %-20s  %-16s  %-5s  %s\n", "Rating", "Author", "Date", "Pics", "Review")
+	fmt.Fprintf(w, "%-6s  %-20s  %-16s  %-5s  %s\n", "------", "--------------------", "----------------", "-----", "------")
 	for _, r := range reviews {
 		rating := r.Rating
 		if rating < 0 {
@@ -386,7 +442,11 @@ func printReviewsTable(w io.Writer, reviews []Review) {
 		author := truncateRunes(r.Author, 20)
 		date := truncateRunes(r.Date, 16)
 		text := truncateRunes(r.Text, 60)
-		fmt.Fprintf(w, "%-6s  %-20s  %-16s  %s\n", stars, author, date, text)
+		pics := ""
+		if len(r.Photos) > 0 {
+			pics = fmt.Sprintf("%d", len(r.Photos))
+		}
+		fmt.Fprintf(w, "%-6s  %-20s  %-16s  %-5s  %s\n", stars, author, date, pics, text)
 	}
 	if len(reviews) > 0 {
 		fmt.Fprintf(w, "\n%d reviews\n", len(reviews))

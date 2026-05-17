@@ -215,6 +215,7 @@ Run 'google-reviews-pp-cli doctor' to verify auth and connectivity.`,
 	}
 	rootCmd.AddCommand(newReviewsCmd(flags))
 	rootCmd.AddCommand(newSummaryCmd(flags))
+	rootCmd.AddCommand(newBusinessCmd(flags))
 	rootCmd.AddCommand(newMapsCmd(flags))
 	rootCmd.AddCommand(newDoctorCmd(flags))
 	rootCmd.AddCommand(newAgentContextCmd(rootCmd))
