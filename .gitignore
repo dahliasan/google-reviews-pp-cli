@@ -1,0 +1,9 @@
+google-reviews-pp-cli
+google-reviews-pp-mcp
+dist/
+*.db
+*.db-shm
+*.db-wal
+.env
+session-state.json
+/tmp/

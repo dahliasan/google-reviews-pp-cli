@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-05-17T02:54:12.48964Z",
+  "printing_press_version": "4.8.0",
+  "api_name": "google-reviews",
+  "display_name": "Google Reviews",
+  "cli_name": "google-reviews-pp-cli",
+  "owner": "dahlia",
+  "printer": "dahliasan",
+  "printer_name": "dahlia",
+  "spec_path": "/Users/dahlia/printing-press/.runstate/smolsites-workspace-bee8712c/runs/20260517-115025/research/google-reviews-spec.yaml",
+  "spec_format": "internal",
+  "spec_checksum": "sha256:b97ecf25c08549b91adea74202f94beb41011e1a84595de802ca053668820c96",
+  "run_id": "20260517-115025",
+  "mcp_binary": "google-reviews-pp-mcp",
+  "mcp_tool_count": 2,
+  "mcp_public_tool_count": 2,
+  "mcp_ready": "full",
+  "api_version": "0.1.0",
+  "auth_type": "none"
+}
