@@ -363,6 +363,7 @@ Examples:
 
 			cookies := extractChromeCookies(cmd.Context())
 			allReviews := make([]Review, 0)
+			seenIDs := make(map[string]struct{})
 			offset := flagOffset
 
 			for {
@@ -388,9 +389,22 @@ Examples:
 					return fmt.Errorf("parse reviews: %w", err)
 				}
 
-				allReviews = append(allReviews, batch...)
+				// Deduplicate: stop paginating when Google loops (all IDs already seen).
+				newInBatch := 0
+				for _, r := range batch {
+					if r.ReviewID == "" {
+						allReviews = append(allReviews, r)
+						newInBatch++
+						continue
+					}
+					if _, dup := seenIDs[r.ReviewID]; !dup {
+						seenIDs[r.ReviewID] = struct{}{}
+						allReviews = append(allReviews, r)
+						newInBatch++
+					}
+				}
 
-				if !flagAll || len(batch) == 0 {
+				if !flagAll || len(batch) == 0 || newInBatch == 0 {
 					break
 				}
 				offset += len(batch)
